@@ -301,6 +301,23 @@ int8_t I2Cdev::readBytes(uint8_t devAddr, uint8_t regAddr, uint8_t length, uint8
             count = -1; // error
         }
 
+    #elif (I2CDEV_IMPLEMENTATION == I2CDEV_RPI)
+
+	/* TODO: Implement loop - see above - in case read-request is for more than 32 bytes
+	 * Q. How do devices respond to stop/start/[register]/ - can we really just repeat the read?
+	 * IMPORTANT:
+	 *                 <<<<<<<< Don't we need to update regAddr first? >>>>>>>>
+	 */
+	int status = RPi2c::bus()->busRead (devAddr, regAddr, length, data);
+	if (status < 0) {
+        #ifdef I2CDEV_SERIAL_DEBUG
+            Serial.print(RPi2c::bus()->lastError ());
+        #endif
+            count = -1; // error
+	} else {
+            count = status; // bytes read
+	}
+
     #endif
 
     // check for timeout
@@ -453,6 +470,23 @@ int8_t I2Cdev::readWords(uint8_t devAddr, uint8_t regAddr, uint8_t length, uint1
         } else {
             count = -1; // error
         }
+
+    #elif (I2CDEV_IMPLEMENTATION == I2CDEV_RPI)
+
+	/* TODO: Implement loop - see above - in case read-request is for more than 32 bytes
+	 * Q. How do devices respond to stop/start/[register]/ - can we really just repeat the read?
+	 * IMPORTANT:
+	 *                 <<<<<<<< Don't we need to update regAddr first? >>>>>>>>
+	 */
+	int status = RPi2c::bus()->busRead (devAddr, regAddr, length, data, false /* not LSB */);
+	if (status < 0) {
+        #ifdef I2CDEV_SERIAL_DEBUG
+            Serial.print(RPi2c::bus()->lastError ());
+        #endif
+            count = -1; // error
+	} else {
+            count = status; // words read
+	}
 
     #endif
 
@@ -622,6 +656,21 @@ bool I2Cdev::writeBytes(uint8_t devAddr, uint8_t regAddr, uint8_t length, uint8_
         Fastwire::stop();
         //status = Fastwire::endTransmission();
     #endif
+    #if (I2CDEV_IMPLEMENTATION == I2CDEV_RPI)
+	/* TODO: Implement loop - see above - in case write-request is for more than 32 bytes
+	 * Q. How do devices respond to stop/start/[register]/ - can we really just repeat the write?
+	 * IMPORTANT:
+	 *                 <<<<<<<< Don't we need to update regAddr first? >>>>>>>>
+	 */
+        status = RPi2c::bus()->busWrite (devAddr, regAddr, length, data);
+	if (status < 0) {
+        #ifdef I2CDEV_SERIAL_DEBUG
+            Serial.print(RPi2c::bus()->lastError ());
+        #endif
+	} else {
+            status = 0; // success // FIXME - why can't we return number of bytes written?
+	}
+    #endif
     #ifdef I2CDEV_SERIAL_DEBUG
         Serial.println(". Done.");
     #endif
@@ -680,6 +729,21 @@ bool I2Cdev::writeWords(uint8_t devAddr, uint8_t regAddr, uint8_t length, uint16
     #elif (I2CDEV_IMPLEMENTATION == I2CDEV_BUILTIN_FASTWIRE)
         Fastwire::stop();
         //status = Fastwire::endTransmission();
+    #endif
+    #if (I2CDEV_IMPLEMENTATION == I2CDEV_RPI)
+	/* TODO: Implement loop - see above - in case write-request is for more than 32 bytes
+	 * Q. How do devices respond to stop/start/[register]/ - can we really just repeat the write?
+	 * IMPORTANT:
+	 *                 <<<<<<<< Don't we need to update regAddr first? >>>>>>>>
+	 */
+        status = RPi2c::bus()->busWrite (devAddr, regAddr, length, data, false /* not LSB */);
+	if (status < 0) {
+        #ifdef I2CDEV_SERIAL_DEBUG
+            Serial.print(RPi2c::bus()->lastError ());
+        #endif
+	} else {
+            status = 0; // success // FIXME - why can't we return number of words written?
+	}
     #endif
     #ifdef I2CDEV_SERIAL_DEBUG
         Serial.println(". Done.");
