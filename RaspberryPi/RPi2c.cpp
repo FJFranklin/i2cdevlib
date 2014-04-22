@@ -32,6 +32,7 @@ THE SOFTWARE.
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/ioctl.h>
+#include <sys/time.h>
 
 #include <linux/i2c-dev.h>
 
@@ -52,6 +53,31 @@ static const char * s_error_wrerr   = "RPi2c::bus_bwrite: error: Failed to trans
 
 static RPi2c * s_default_bus = 0;
 
+static struct timeval s_tval_Initial;
+
+static void timerStart ()
+{
+	gettimeofday (&s_tval_Initial, 0);
+}
+
+static unsigned long timerStop () // this will work for about 24 days; don't really want to use millis at all!
+{
+	unsigned long us = 0;
+
+	struct timeval tval_Current;
+
+	gettimeofday (&tval_Current, 0);
+
+	if (tval_Current.tv_usec < s_tval_Initial.tv_usec) {
+		us = (1000000 + tval_Current.tv_usec) - s_tval_Initial.tv_usec;
+		us = (tval_Current.tv_sec - s_tval_Initial.tv_sec - 1) * 1000000 + us;
+	} else {
+		us = tval_Current.tv_usec - s_tval_Initial.tv_usec;
+		us = (tval_Current.tv_sec - s_tval_Initial.tv_sec) * 1000000 + us;
+	}
+	return us;
+}
+
 void RPi2c::setDefaultBus (RPi2c * i2c)
 {
 	s_default_bus = i2c;
@@ -69,7 +95,11 @@ void RPi2c::setError (const char * error_message)
 
 RPi2c::RPi2c () :
 	m_error(s_error_none),
-	m_fd (-1)
+	m_fd (-1),
+	m_transferTime(0),
+	m_bTransferTime(false),
+	m_bEnableRS(false),
+	m_bSpecifyRegister(true)
 {
 	//
 }
@@ -129,21 +159,38 @@ int RPi2c::busBRead (uint16_t device_address, uint16_t register_address, uint16_
 	uint8_t * register_byte_ptr = m_buffer;
 	uint16_t register_byte_count = 2;
 
-	if (register_address & 0xFF00) {
-		m_buffer[0] = static_cast<uint8_t>((register_address >> 8) & 0x00FF);
-	} else {
-		++register_byte_ptr;
-		--register_byte_count;
+	if (m_bSpecifyRegister) {
+		if (register_address & 0xFF00) {
+			m_buffer[0] = static_cast<uint8_t>((register_address >> 8) & 0x00FF);
+		} else {
+			++register_byte_ptr;
+			--register_byte_count;
+		}
+		m_buffer[1] = static_cast<uint8_t>(register_address & 0x00FF);
 	}
-	m_buffer[1] = static_cast<uint8_t>(register_address & 0x00FF);
 
 	struct i2c_msg message[2] = {
 		{ device_address, 0, register_byte_count, reinterpret_cast<char *>(register_byte_ptr) },
 		{ device_address, I2C_M_RD, byte_count, reinterpret_cast<char *>(m_buffer + 2) }
 	};
-	struct i2c_rdwr_ioctl_data data = { message, 2 };
 
-	if (ioctl (m_fd, I2C_RDWR, &data) < 0) {
+	int status = 0;
+
+	if (m_bEnableRS && m_bSpecifyRegister) {
+		struct i2c_rdwr_ioctl_data data = { message, 2 };
+		status = ioctl (m_fd, I2C_RDWR, &data);
+	} else {
+		if (m_bSpecifyRegister) {
+			struct i2c_rdwr_ioctl_data data = { message, 1 };
+			status = ioctl (m_fd, I2C_RDWR, &data);
+		}
+		if (status >= 0) {
+			struct i2c_rdwr_ioctl_data data = { message + 1, 1 };
+			status = ioctl (m_fd, I2C_RDWR, &data);
+		}
+	}
+
+	if (status < 0) {
 		m_error = s_error_rderr;
 		return -1;
 	}
@@ -152,54 +199,83 @@ int RPi2c::busBRead (uint16_t device_address, uint16_t register_address, uint16_
 
 /* Returns number of bytes read; returns -1 on failure - use last_error() to see why.
  */
-int RPi2c::busRead (uint16_t device_address, uint16_t register_address, uint16_t byte_count, uint8_t * bytes)
+int RPi2c::busRead (uint16_t device_address, uint16_t register_address, uint16_t byte_count, uint8_t * bytes, bool bSpecifyRegister)
 {
+	if (m_bTransferTime) {
+		m_transferTime = 0;
+		timerStart ();
+	}
+
+	m_bSpecifyRegister = bSpecifyRegister;
+
 	m_error = s_error_none;
 
-	if (byte_count < 1) return 0; // ?? Are there special cases? What about reading without specifying a register? TODO: Check!
-
-	if (!bytes) {
+	if (byte_count && !bytes) {
 		m_error = s_error_rddata;
 		return -1;
 	}
 
-	if (byte_count > RPI2C_BUFLEN) // unclear whether this is strictly correct / necessary TODO: Check!
-		byte_count = RPI2C_BUFLEN;
+	int status = 0;
 
-	int status = busBRead (device_address, register_address, byte_count);
+	uint16_t byte_count_total = 0;
 
-	if (status > 0) {
+	while (byte_count > 0) {
+		uint16_t byte_count_this = (byte_count > RPI2C_BUFLEN) ? RPI2C_BUFLEN : byte_count;
+
+		status = busBRead (device_address, register_address, byte_count);
+
+		if (status < 0) break;
+
 		memcpy (bytes, m_buffer + 2, byte_count);
+
+		// logically, this is the only place to add a time-out // TODO ??
+
+		byte_count_total += byte_count_this;
+		byte_count -= byte_count_this;
+		bytes += byte_count_this;
+
+		m_bSpecifyRegister = false;
 	}
-	return status;
+
+	if (m_bTransferTime) {
+		m_transferTime = timerStop ();
+	}
+	return (status < 0) ? status : byte_count_total;
 }
 
 /* Returns number of words read; returns -1 on failure - use last_error() to see why.
  */
-int RPi2c::busRead (uint16_t device_address, uint16_t register_address, uint16_t word_count, uint16_t * words, bool data_lsb_1st)
+int RPi2c::busRead (uint16_t device_address, uint16_t register_address, uint16_t word_count, uint16_t * words, bool data_lsb_1st, bool bSpecifyRegister)
 {
+	if (m_bTransferTime) {
+		m_transferTime = 0;
+		timerStart ();
+	}
+
+	m_bSpecifyRegister = bSpecifyRegister;
+
 	m_error = s_error_none;
 
-	if (word_count < 1) return 0; // ?? Are there special cases? What about reading without specifying a register? TODO: Check!
-
-	if (!words) {
+	if (word_count && !words) {
 		m_error = s_error_rddata;
 		return -1;
 	}
 
-	uint16_t byte_count = word_count * 2;
+	int status = 0;
 
-	if (byte_count > RPI2C_BUFLEN) // unclear whether this is strictly correct / necessary TODO: Check!
-		byte_count = RPI2C_BUFLEN;
+	uint16_t word_count_total = 0;
 
-	int status = busBRead (device_address, register_address, byte_count);
+	while (word_count > 0) {
+		uint16_t word_count_this = (2 * word_count > RPI2C_BUFLEN) ? (RPI2C_BUFLEN / 2) : word_count;
+		uint16_t byte_count = word_count * 2;
 
-	if (status > 0) {
-		word_count = byte_count / 2;
-		
 		uint8_t * byte = m_buffer + 2;
 
-		for (int iw = 0; iw < word_count; iw++) {
+		status = busBRead (device_address, register_address, byte_count);
+
+		if (status < 0) break;
+
+		for (int iw = 0; iw < word_count_this; iw++) {
 			if (data_lsb_1st) {
 				words[iw]  = static_cast<uint16_t>(*byte++);
 				words[iw] |= static_cast<uint16_t>(*byte++) << 8;
@@ -208,9 +284,20 @@ int RPi2c::busRead (uint16_t device_address, uint16_t register_address, uint16_t
 				words[iw] |= static_cast<uint16_t>(*byte++);
 			}
 		}
-		status = word_count;
+
+		// logically, this is the only place to add a time-out // TODO ??
+
+		word_count_total += word_count_this;
+		word_count -= word_count_this;
+		words += word_count_this;
+
+		m_bSpecifyRegister = false;
 	}
-	return status;
+
+	if (m_bTransferTime) {
+		m_transferTime = timerStop ();
+	}
+	return (status < 0) ? status : word_count_total;
 }
 
 /* Returns number of bytes written; returns -1 on failure - use last_error() to see why.
@@ -227,23 +314,26 @@ int RPi2c::busBWrite (uint16_t device_address, uint16_t register_address, uint16
 		return -1;
 	}
 
-	uint8_t * register_byte_ptr = m_buffer;
-	uint16_t register_byte_count = 2;
+	uint8_t * register_byte_ptr = m_buffer + 2;
+	uint16_t register_byte_count = 0;
 
-	if (register_address & 0xFF00) {
-		m_buffer[0] = static_cast<uint8_t>((register_address >> 8) & 0x00FF);
-	} else {
-		++register_byte_ptr;
-		--register_byte_count;
+	if (m_bSpecifyRegister) {
+		*--register_byte_ptr = static_cast<uint8_t>(register_address & 0x00FF);
+		++register_byte_count;
+
+		if (register_address & 0xFF00) {
+			*--register_byte_ptr = static_cast<uint8_t>((register_address >> 8) & 0x00FF);
+			++register_byte_count;
+		}
 	}
-	m_buffer[1] = static_cast<uint8_t>(register_address & 0x00FF);
-
 	struct i2c_msg message[1] = {
 		{ device_address, 0, register_byte_count + byte_count, reinterpret_cast<char *>(register_byte_ptr) }
 	};
 	struct i2c_rdwr_ioctl_data data = { message, 1 };
 
-	if (ioctl (m_fd, I2C_RDWR, &data) < 0) {
+	int status = ioctl (m_fd, I2C_RDWR, &data);
+
+	if (status < 0) {
 		m_error = s_error_wrerr;
 		return -1;
 	}
@@ -252,58 +342,103 @@ int RPi2c::busBWrite (uint16_t device_address, uint16_t register_address, uint16
 
 /* Returns number of bytes written; returns -1 on failure - use last_error() to see why.
  */
-int RPi2c::busWrite (uint16_t device_address, uint16_t register_address, uint16_t byte_count, const uint8_t * bytes)
+int RPi2c::busWrite (uint16_t device_address, uint16_t register_address, uint16_t byte_count, const uint8_t * bytes, bool bSpecifyRegister)
 {
+	if (m_bTransferTime) {
+		m_transferTime = 0;
+		timerStart ();
+	}
+
+	m_bSpecifyRegister = bSpecifyRegister;
+
 	m_error = s_error_none;
 
-	if (byte_count < 1) return 0; // ?? Are there special cases? What about writing without specifying a register? TODO: Check!
-
-	if (!bytes) {
+	if (byte_count && !bytes) {
 		m_error = s_error_wrdata;
 		return -1;
 	}
 
-	if (byte_count > RPI2C_BUFLEN)
-		byte_count = RPI2C_BUFLEN;
+	int status = 0;
 
-	memcpy (m_buffer + 2, bytes, byte_count);
+	uint16_t byte_count_total = 0;
 
-	return busBWrite (device_address, register_address, byte_count);
+	while (byte_count > 0) {
+		uint16_t byte_count_this = (byte_count > RPI2C_BUFLEN) ? RPI2C_BUFLEN : byte_count;
+
+		memcpy (m_buffer + 2, bytes, byte_count_this);
+
+		status = busBWrite (device_address, register_address, byte_count_this);
+
+		if (status < 0) break;
+
+		// logically, this is the only place to add a time-out // TODO ??
+
+		byte_count_total += byte_count_this;
+		byte_count -= byte_count_this;
+		bytes += byte_count_this;
+
+		m_bSpecifyRegister = false;
+	}
+
+	if (m_bTransferTime) {
+		m_transferTime = timerStop ();
+	}
+	return (status < 0) ? status : byte_count_total;
 }
 
 /* Returns number of words written; returns -1 on failure - use last_error() to see why.
  */
-int RPi2c::busWrite (uint16_t device_address, uint16_t register_address, uint16_t word_count, const uint16_t * words, bool data_lsb_1st)
+int RPi2c::busWrite (uint16_t device_address, uint16_t register_address, uint16_t word_count, const uint16_t * words, bool data_lsb_1st, bool bSpecifyRegister)
 {
+	if (m_bTransferTime) {
+		m_transferTime = 0;
+		timerStart ();
+	}
+
+	m_bSpecifyRegister = bSpecifyRegister;
+
 	m_error = s_error_none;
 
-	if (word_count < 1) return 0; // ?? Are there special cases? What about writing without specifying a register? TODO: Check!
-
-	if (!words) {
+	if (word_count && !words) {
 		m_error = s_error_wrdata;
 		return -1;
 	}
 
-	uint16_t byte_count = word_count * 2;
+	int status = 0;
 
-	if (byte_count > RPI2C_BUFLEN)
-		byte_count = RPI2C_BUFLEN;
+	uint16_t word_count_total = 0;
 
-	word_count = byte_count / 2;
+	while (word_count > 0) {
+		uint16_t word_count_this = (2 * word_count > RPI2C_BUFLEN) ? (RPI2C_BUFLEN / 2) : word_count;
+		uint16_t byte_count = word_count * 2;
 
-	uint8_t * byte = m_buffer + 2;
+		uint8_t * byte = m_buffer + 2;
 
-	for (int iw = 0; iw < word_count; iw++) {
-		if (data_lsb_1st) {
-			*byte++ = static_cast<uint8_t>(words[iw] & 0xFF);
-			*byte++ = static_cast<uint8_t>((words[iw] >> 8) & 0xFF);
-		} else {
-			*byte++ = static_cast<uint8_t>((words[iw] >> 8) & 0xFF);
-			*byte++ = static_cast<uint8_t>(words[iw] & 0xFF);
+		for (int iw = 0; iw < word_count_this; iw++) {
+			if (data_lsb_1st) {
+				*byte++ = static_cast<uint8_t>(words[iw] & 0xFF);
+				*byte++ = static_cast<uint8_t>((words[iw] >> 8) & 0xFF);
+			} else {
+				*byte++ = static_cast<uint8_t>((words[iw] >> 8) & 0xFF);
+				*byte++ = static_cast<uint8_t>(words[iw] & 0xFF);
+			}
 		}
+
+		status = busBWrite (device_address, register_address, byte_count);
+
+		if (status < 0) break;
+
+		// logically, this is the only place to add a time-out // TODO ??
+
+		word_count_total += word_count_this;
+		word_count -= word_count_this;
+		words += word_count_this;
+
+		m_bSpecifyRegister = false;
 	}
 
-	int status = busBWrite (device_address, register_address, byte_count);
-
-	return (status > 0) ? word_count : status;
+	if (m_bTransferTime) {
+		m_transferTime = timerStop ();
+	}
+	return (status < 0) ? status : word_count_total;
 }

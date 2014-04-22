@@ -40,9 +40,15 @@ THE SOFTWARE.
 
 class RPi2c {
 private:
-	const char * m_error;
-	int          m_fd;
-	uint8_t      m_buffer[RPI2C_BUFLEN+2];
+	const char *  m_error;
+	int           m_fd;
+	uint8_t       m_buffer[RPI2C_BUFLEN+2];
+
+	unsigned long m_transferTime;
+	bool          m_bTransferTime;
+
+	bool          m_bEnableRS;
+	bool          m_bSpecifyRegister; // internal flag
 
 public:
 	/** Set the default I2C bus.
@@ -79,6 +85,30 @@ public:
 	/** Class destructor.
 	 */
 	~RPi2c ();
+
+	/** Whether to calculate the time in microseconds during read/write commands.
+	 * 
+	 * @see transferTime()
+	 * 
+	 * @param bEnable true to enable time calculations.
+	 */
+	inline void setTransferTime (bool bEnable) { m_bTransferTime = bEnable; }
+
+	/** Whether to calculate the time in microseconds during read/write commands.
+	 * 
+	 * @see setTransferTime()
+	 * 
+	 * @return Time during last read/write command.
+	 */
+	inline unsigned long transferTime () const { return m_transferTime; }
+
+	/** Whether to use repeat-start I2C transfers
+	 *
+	 * Repeat-start transfers during reading may be faster, but may not be supported by Raspberry Pi!
+	 * 
+	 * @param bEnable true to enable repeat-start transfers.
+	 */
+	inline void setEnableRS (bool bEnable) { m_bEnableRS = bEnable; }
 
 	/** Provides a string with an error message.
 	 * 
@@ -121,12 +151,28 @@ public:
 	 * 
 	 * @param device_address   The 7-bit address of the i2c device (unmodified with read/write bit)
 	 * @param register_address Register on device to read from
-	 * @param byte_count       Number of bytes to read (maximum RPI2C_BUFLEN = 32 bytes)
+	 * @param byte_count       Number of bytes to read
+	 * @param bytes            Pointer to 8-bit word data.
+	 * @param bSpecifyRegister Whether to specify the register address on the target device.
+	 * 
+	 * @return Number of bytes read; returns -1 on failure - use lastError() to see why.
+	 */
+	int busRead (uint16_t device_address, uint16_t register_address, uint16_t byte_count, uint8_t * bytes,
+				 bool bSpecifyRegister = true);
+
+	/** Read byte-data from device without first specifying the register address.
+	 * 
+	 * Reads 8-bit byte data from the specified device and register.
+	 * 
+	 * @param device_address   The 7-bit address of the i2c device (unmodified with read/write bit)
+	 * @param byte_count       Number of bytes to read
 	 * @param bytes            Pointer to 8-bit word data.
 	 * 
 	 * @return Number of bytes read; returns -1 on failure - use lastError() to see why.
 	 */
-	int busRead (uint16_t device_address, uint16_t register_address, uint16_t byte_count /* max. RPI2C_BUFLEN */, uint8_t * bytes);
+	inline int busReadOnly (uint16_t device_address, uint16_t byte_count, uint8_t * bytes) {
+		return busRead (device_address, 0, byte_count, bytes, false);
+	}
 
 	/** Read word-data from device.
 	 * 
@@ -134,14 +180,30 @@ public:
 	 * 
 	 * @param device_address   The 7-bit address of the i2c device (unmodified with read/write bit)
 	 * @param register_address Register on device to read from
-	 * @param word_count       Number of words to read (maximum RPI2C_BUFLEN/2 = 16 words)
+	 * @param word_count       Number of words to read
+	 * @param words            Pointer to 16-bit word data.
+	 * @param data_lsb_1st     true if data is coverted to bytes least-significant-byte first
+	 * @param bSpecifyRegister Whether to specify the register address on the target device.
+	 * 
+	 * @return Number of words read; returns -1 on failure - use lastError() to see why.
+	 */
+	int busRead (uint16_t device_address, uint16_t register_address, uint16_t word_count, uint16_t * words,
+				 bool data_lsb_1st, bool bSpecifyRegister = true);
+
+	/** Read word-data from device without first specifying the register address.
+	 * 
+	 * Reads 16-bit word data from the specified device and register.
+	 * 
+	 * @param device_address   The 7-bit address of the i2c device (unmodified with read/write bit)
+	 * @param word_count       Number of words to read
 	 * @param words            Pointer to 16-bit word data.
 	 * @param data_lsb_1st     true if data is coverted to bytes least-significant-byte first
 	 * 
 	 * @return Number of words read; returns -1 on failure - use lastError() to see why.
 	 */
-	int busRead (uint16_t device_address, uint16_t register_address, uint16_t word_count /* max. RPI2C_BUFLEN/2 */, uint16_t * words,
-				 bool data_lsb_1st);
+	inline int busReadOnly (uint16_t device_address, uint16_t word_count, uint16_t * words, bool data_lsb_1st) {
+		return busRead (device_address, 0, word_count, words, data_lsb_1st, false);
+	}
 
 private:
 	/** Internal method used by busWrite(); responsible for actual i2c data transmission.
@@ -156,12 +218,28 @@ public:
 	 * 
 	 * @param device_address   The 7-bit address of the i2c device (unmodified with read/write bit)
 	 * @param register_address Register on device to write to
-	 * @param byte_count       Number of bytes to write (maximum RPI2C_BUFLEN = 32 bytes)
+	 * @param byte_count       Number of bytes to write
+	 * @param bytes            Pointer to 8-bit byte data.
+	 * @param bSpecifyRegister Whether to specify the register address on the target device.
+	 * 
+	 * @return Number of bytes written; returns -1 on failure - use lastError() to see why.
+	 */
+	int busWrite (uint16_t device_address, uint16_t register_address, uint16_t byte_count, const uint8_t * bytes,
+				  bool bSpecifyRegister = true);
+
+	/** Write word-data to device without first specifying the register address.
+	 * 
+	 * Writes 8-bit byte data to the specified device and register.
+	 * 
+	 * @param device_address   The 7-bit address of the i2c device (unmodified with read/write bit)
+	 * @param byte_count       Number of bytes to write
 	 * @param bytes            Pointer to 8-bit byte data.
 	 * 
 	 * @return Number of bytes written; returns -1 on failure - use lastError() to see why.
 	 */
-	int busWrite (uint16_t device_address, uint16_t register_address, uint16_t byte_count /* max. RPI2C_BUFLEN */, const uint8_t * bytes);
+	inline int busWriteOnly (uint16_t device_address, uint16_t byte_count, const uint8_t * bytes) {
+		return busWrite (device_address, 0, byte_count, bytes, false);
+	}
 
 	/** Write word-data to device.
 	 * 
@@ -169,14 +247,30 @@ public:
 	 * 
 	 * @param device_address   The 7-bit address of the i2c device (unmodified with read/write bit)
 	 * @param register_address Register on device to write to
-	 * @param word_count       Number of words to write (maximum RPI2C_BUFLEN/2 = 16 words)
+	 * @param word_count       Number of words to write
+	 * @param words            Pointer to 16-bit word data.
+	 * @param data_lsb_1st     true if data is coverted to bytes least-significant-byte first
+	 * @param bSpecifyRegister Whether to specify the register address on the target device.
+	 * 
+	 * @return Number of words written; returns -1 on failure - use lastError() to see why.
+	 */
+	int busWrite (uint16_t device_address, uint16_t register_address, uint16_t word_count, const uint16_t * words,
+				  bool data_lsb_1st, bool bSpecifyRegister = true);
+
+	/** Write word-data to device without first specifying the register address.
+	 * 
+	 * Writes 16-bit word data to the specified device and register.
+	 * 
+	 * @param device_address   The 7-bit address of the i2c device (unmodified with read/write bit)
+	 * @param word_count       Number of words to write
 	 * @param words            Pointer to 16-bit word data.
 	 * @param data_lsb_1st     true if data is coverted to bytes least-significant-byte first
 	 * 
 	 * @return Number of words written; returns -1 on failure - use lastError() to see why.
 	 */
-	int busWrite (uint16_t device_address, uint16_t register_address, uint16_t word_count /* max. RPI2C_BUFLEN/2 */, const uint16_t * words,
-				  bool data_lsb_1st);
+	inline int busWriteOnly (uint16_t device_address, uint16_t word_count, const uint16_t * words, bool data_lsb_1st) {
+		return busWrite (device_address, 0, word_count, words, data_lsb_1st, false);
+	}
 
 };
 
