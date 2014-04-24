@@ -1,4 +1,4 @@
-all:		libI2Cdev.a
+all:		libI2Cdev.a SensorStick
 
 clean:
 		rm *.o *~
@@ -30,6 +30,9 @@ DEVICE_OBJS = \
 UNSUPPORTED=DS1307.o \
 	IAQ2000.o \
 	SSD1308.o
+
+SensorStick:	libI2Cdev.a $(RPI_SRC)/examples/SensorStick.cpp $(RPI2C_HDRS)
+		g++ -O2 -o $@ $(RPI2C_DEFS) $(RPI2C_INCS) $(RPI_SRC)/examples/SensorStick.cpp -I$(ARDUINO_SRC) -L. -lI2Cdev
 
 libI2Cdev.a:	$(DEVICE_OBJS) $(RPI2C_OBJS)
 		ar rcs $@ $(DEVICE_OBJS) $(RPI2C_OBJS)
