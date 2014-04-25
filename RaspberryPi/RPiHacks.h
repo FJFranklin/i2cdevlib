@@ -31,6 +31,8 @@ THE SOFTWARE.
 #include <string.h>
 #include <math.h>
 
+#include <avr/pgmspace.h>
+
 /* Fake implementation of Arduino Serial.print/println
  */
 
