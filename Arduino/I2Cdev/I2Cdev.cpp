@@ -460,7 +460,7 @@ int8_t I2Cdev::readWords(uint8_t devAddr, uint8_t regAddr, uint8_t length, uint1
         if (status == 0) {
             count = length; // success
             for (uint8_t i = 0; i < length; i++) {
-                data[i] = (intermediate[2*i] << 8) | intermediate[2*i + 1];
+	      data[i] = (intermediate[2*i] << 8) | intermediate[2*i + 1]; // FIXME ?? intermediate[] is of size=length but this attempts to access intermediate[2*length-1]
             }
         } else {
             count = -1; // error
@@ -486,6 +486,133 @@ int8_t I2Cdev::readWords(uint8_t devAddr, uint8_t regAddr, uint8_t length, uint1
         Serial.print(". Done (");
         Serial.print(count, DEC);
         Serial.println(" read).");
+    #endif
+    
+    return count;
+}
+
+/* readBytesOnly() is required by IAQ2000 which reads a 2-byte MSB-first word without specifying a register first
+ * Originally in IAQ2000.cpp, written 2012-04-01 by Peteris Skorovs <pskorovs@gmail.com>
+ * 
+ * This is a "stripped-down" version of the standard Jeff Rowberg's I2Cdev::readBytes method intended to provide compatibility with iAQ-2000,
+ * which apparently does not support setting of an address pointer to indicate from which position is to start read from.
+ * 
+ * TODO: Check & add FASTWIRE, etc.
+ */
+/** Read bytes from a slave device without specifying the register.
+ * 
+ * @param devAddr Address of the slave device to read bytes from
+ * @param length Number of bytes to read (max. 255)
+ * @param data Container for bytes read from device
+ * @param timeout Optional read timeout in milliseconds (0 to disable, leave off to use default class value in I2Cdev::readTimeout)
+ * 
+ * @return Number of bytes read (0 indicates failure)
+ */
+int8_t I2Cdev::readBytesOnly(uint8_t devAddr, uint8_t length, uint8_t * data, uint16_t timeout) {
+    #ifdef I2CDEV_SERIAL_DEBUG
+	Serial.print("I2C (0x");
+	Serial.print(devAddr, HEX);
+	Serial.print(") reading ");
+	Serial.print(length, DEC);
+	Serial.print(" bytes...");
+    #endif
+
+    int8_t count = 0;
+
+    #if (I2CDEV_IMPLEMENTATION == I2CDEV_RPI)
+
+	int status = RPi2c::bus()->busReadOnly (devAddr, length, data);
+	if (status < 0) {
+        #ifdef I2CDEV_SERIAL_DEBUG
+            Serial.print(RPi2c::bus()->lastError ());
+        #endif
+            count = 0; // error
+	} else {
+            count = status; // words read
+	}
+
+    #else
+        Wire.requestFrom(devAddr, length);
+    
+        uint32_t t1 = millis();
+        for (; Wire.available() && (timeout == 0 || millis() - t1 < timeout); count++) {
+        #if ((I2CDEV_IMPLEMENTATION == I2CDEV_ARDUINO_WIRE && ARDUINO < 100) || I2CDEV_IMPLEMENTATION == I2CDEV_BUILTIN_NBWIRE)
+            data[count] = Wire.receive();
+        #elif (I2CDEV_IMPLEMENTATION == I2CDEV_ARDUINO_WIRE && ARDUINO >= 100)
+            data[count] = Wire.read();
+        #endif
+        #ifdef I2CDEV_SERIAL_DEBUG
+            Serial.print(data[count], HEX);
+            if (count + 1 < length) Serial.print(" ");
+        #endif
+        }
+        if (timeout > 0 && millis() - t1 >= timeout && count < length) count = -1; // timeout
+    #endif
+    
+    #ifdef I2CDEV_SERIAL_DEBUG
+        Serial.print(". Done (");
+        Serial.print(count, DEC);
+        Serial.println(" bytes read).");
+    #endif
+    
+    return count;
+}
+
+/** Read words from a slave device without specifying the register.
+ * 
+ * @param devAddr Address of the slave device to read bytes from
+ * @param length Number of words to read (max. 127)
+ * @param data Container for words read from device
+ * @param timeout Optional read timeout in milliseconds (0 to disable, leave off to use default class value in I2Cdev::readTimeout)
+ * 
+ * @return Number of words read (0 indicates failure)
+ */
+int8_t I2Cdev::readWordsOnly(uint8_t devAddr, uint8_t length, uint16_t * data, uint16_t timeout) {
+    #ifdef I2CDEV_SERIAL_DEBUG
+        Serial.print("I2C (0x");
+        Serial.print(devAddr, HEX);
+        Serial.print(") reading ");
+        Serial.print(length, DEC);
+        Serial.print(" words...");
+    #endif
+    
+    int8_t count = 0;
+
+    #if (I2CDEV_IMPLEMENTATION == I2CDEV_RPI)
+
+	int status = RPi2c::bus()->busReadOnly (devAddr, length, data, false /* not LSB */);
+	if (status < 0) {
+        #ifdef I2CDEV_SERIAL_DEBUG
+            Serial.print(RPi2c::bus()->lastError ());
+        #endif
+            count = 0; // error
+	} else {
+            count = status; // words read
+	}
+
+    #else
+
+        count = I2Cdev::readBytesOnly (devAddr, length * 2, (uint8_t *) data, timeout);
+        if (count > 0) {
+            count /= 2;
+
+            uint16_t word = 0xF00F;
+            uint8_t * bytes = (uint8_t *) &word;
+
+            if (*bytes == 0x0F) { // need to swap bytes
+                for (int8_t i = 0; i < count; i++) {
+                    word = data[i];
+                    data[i] = ((word & 0x00FF) << 8) | ((word >> 8) & 0x00FF);
+                }
+            }
+        }
+    
+    #endif
+
+    #ifdef I2CDEV_SERIAL_DEBUG
+        Serial.print(". Done (");
+        Serial.print(count, DEC);
+        Serial.println(" words read).");
     #endif
     
     return count;

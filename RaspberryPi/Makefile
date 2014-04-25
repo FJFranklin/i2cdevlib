@@ -27,15 +27,14 @@ DEVICE_OBJS = \
 	MPU6050.o \
 	TCA6424A.o \
 	DS1307.o \
-	SSD1308.o
-
-UNSUPPORTED=IAQ2000.o
+	SSD1308.o \
+	IAQ2000.o
 
 SensorStick:	libI2Cdev.a $(RPI_SRC)/examples/SensorStick.cpp $(RPI2C_HDRS)
 		g++ -O2 -o $@ $(RPI2C_DEFS) $(RPI2C_INCS) $(RPI_SRC)/examples/SensorStick.cpp -I$(ARDUINO_SRC) -L. -lI2Cdev
 
-libI2Cdev.a:	$(DEVICE_OBJS) $(RPI2C_OBJS)
-		ar rcs $@ $(DEVICE_OBJS) $(RPI2C_OBJS)
+libI2Cdev.a:	$(RPI2C_OBJS) $(DEVICE_OBJS)
+		ar rcs $@ $(RPI2C_OBJS) $(DEVICE_OBJS)
 
 RPi2c.o:	$(RPI_SRC)/RPi2c.cpp $(RPI_SRC)/RPi2c.h
 		g++ -O2 -c -o $@ $(RPI2C_DEFS) -I$(RPI_SRC) $(RPI_SRC)/RPi2c.cpp

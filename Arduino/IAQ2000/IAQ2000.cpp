@@ -2,9 +2,6 @@
 // Based on AppliedSensor iAQ-2000 Interface Description, Version PA1, 2009
 // 2012-04-01 by Peteris Skorovs <pskorovs@gmail.com>
 //
-// This I2C device library is using (and submitted as a part of) Jeff Rowberg's I2Cdevlib library,
-// which should (hopefully) always be available at https://github.com/jrowberg/i2cdevlib
-//
 // Changelog:
 //     2012-04-01 - initial release
 
@@ -74,53 +71,8 @@ bool IAQ2000::testConnection() {
  * @return Predicted CO2 concentration based on human induced volatile organic compounds (VOC) detection (in ppm VOC + CO2 equivalents)
  */
 uint16_t IAQ2000::getIaq() {
-  // read bytes from the DATA1 AND DATA2 registers and bit-shifting them into a 16-bit value
-  readAllBytes(devAddr, 2, buffer);
-  return ((buffer[0] << 8) | buffer[1]);
-}
-
-/**  Read bytes from a slave device.
- * This is a "stripped-down" version of the standard Jeff Rowberg's I2Cdev::readBytes method
- * intended to provide compatibility with iAQ-2000,
- * which apparently does not support setting of an address pointer to indicate from which position is to start read from.
- * @param devAddr Address of the slave device to read bytes from
- * @param length Number of bytes to read
- * @param data Buffer to store read data in
- * @param timeout Optional read timeout in milliseconds (0 to disable, leave off to use default class value in I2Cdev::readTimeout)
- * @return Number of bytes read (0 indicates failure)
- */
-int8_t IAQ2000::readAllBytes(uint8_t devAddr, uint8_t length, uint8_t *data, uint16_t timeout) {
-#ifdef I2CDEV_SERIAL_DEBUG
-    Serial.print("I2C (0x");
-    Serial.print(devAddr, HEX);
-    Serial.print(") reading ");
-    Serial.print(length, DEC);
-    Serial.print(" bytes...");
-#endif
-    
-    int8_t count = 0;
-
-    Wire.requestFrom(devAddr, length);
-    
-    uint32_t t1 = millis();
-    for (; Wire.available() && (timeout == 0 || millis() - t1 < timeout); count++) {
-#if ((I2CDEV_IMPLEMENTATION == I2CDEV_ARDUINO_WIRE && ARDUINO < 100) || I2CDEV_IMPLEMENTATION == I2CDEV_BUILTIN_NBWIRE)
-        data[count] = Wire.receive();
-#elif (I2CDEV_IMPLEMENTATION == I2CDEV_ARDUINO_WIRE && ARDUINO >= 100)
-        data[count] = Wire.read();
-#endif
-#ifdef I2CDEV_SERIAL_DEBUG
-        Serial.print(data[count], HEX);
-        if (count + 1 < length) Serial.print(" ");
-#endif
-    }
-    if (timeout > 0 && millis() - t1 >= timeout && count < length) count = -1; // timeout
-    
-#ifdef I2CDEV_SERIAL_DEBUG
-    Serial.print(". Done (");
-    Serial.print(count, DEC);
-    Serial.println(" read).");
-#endif
-    
-    return count;
+    // read bytes from the DATA1 AND DATA2 registers and bit-shifting them into a 16-bit value
+    uint16_t iaq;
+    I2Cdev::readWordsOnly (devAddr, 1, &iaq);
+    return iaq;
 }
