@@ -98,7 +98,7 @@ RPi2c::RPi2c () :
 	m_fd (-1),
 	m_transferTime(0),
 	m_bTransferTime(false),
-	m_bEnableRS(false),
+	m_bEnableRS(true),
 	m_bSpecifyRegister(true)
 {
 	//
